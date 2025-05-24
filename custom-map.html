@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Route with Tracking Features</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; }
+    #map { height: 80vh; width: 100%; }
+    #info {
+      padding: 10px;
+      background: #f9f9f9;
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 6px 12px;
+      margin: 4px;
+      border: none;
+      background-color: #007bff;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    span {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+<h2 style="text-align:center;">Live Route Tracking</h2>
+<div id="map">Loading map...</div>
+
+<div id="info">
+  <div class="row">
+    <div>📍 Current: <span id="current-coords">Waiting...</span></div>
+    <div>🎯 Destination: <span id="destination-coords">Not set</span></div>
+  </div>
+  <div class="row">
+    <div>🛣 Distance: <span id="distance">-</span></div>
+    <div>⏱ ETA: <span id="eta">-</span></div>
+  </div>
+  <div class="row">
+    <button onclick="toggleFollow()">🔄 Toggle Auto-Follow</button>
+    <button onclick="centerMap()">🎯 Re-center Map</button>
+    <button onclick="clearRoute()">❌ Clear Route</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+  let map, userMarker, destMarker, routeLine;
+  let currentLatLng = null;
+  let destinationLatLng = null;
+  let mapInitialized = false;
+  let autoFollow = true;
+  const osrmUrl = "https://router.project-osrm.org/route/v1/driving/";
+
+  const elCurrent = document.getElementById("current-coords");
+  const elDest = document.getElementById("destination-coords");
+  const elDistance = document.getElementById("distance");
+  const elEta = document.getElementById("eta");
+
+  function updateCoordsDisplay() {
+    if (currentLatLng) {
+      elCurrent.textContent = `${currentLatLng[0].toFixed(6)}, ${currentLatLng[1].toFixed(6)}`;
+    }
+    if (destinationLatLng) {
+      elDest.textContent = `${destinationLatLng[0].toFixed(6)}, ${destinationLatLng[1].toFixed(6)}`;
+    } else {
+      elDest.textContent = "Not set";
+    }
+  }
+
+  function setupMap(lat, lng) {
+    map = L.map('map').setView([lat, lng], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    userMarker = L.marker([lat, lng], { title: "You" }).addTo(map);
+    currentLatLng = [lat, lng];
+    updateCoordsDisplay();
+
+    map.on('click', e => {
+      const lat = e.latlng.lat;
+      const lng = e.latlng.lng;
+      destinationLatLng = [lat, lng];
+      updateCoordsDisplay();
+
+      if (destMarker) {
+        destMarker.setLatLng(destinationLatLng);
+      } else {
+        destMarker = L.marker(destinationLatLng, { title: "Destination" }).addTo(map);
+      }
+
+      drawRoute();
+    });
+  }
+
+  function drawRoute() {
+    if (!currentLatLng || !destinationLatLng) return;
+
+    const url = `${osrmUrl}${currentLatLng[1]},${currentLatLng[0]};${destinationLatLng[1]},${destinationLatLng[0]}?overview=full&geometries=geojson`;
+
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        const route = data.routes[0];
+        const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+
+        if (routeLine) {
+          routeLine.setLatLngs(coords);
+        } else {
+          routeLine = L.polyline(coords, { color: 'blue', weight: 5 }).addTo(map);
+        }
+
+        elDistance.textContent = (route.distance / 1000).toFixed(2) + " km";
+        elEta.textContent = Math.round(route.duration / 60) + " mins";
+        map.fitBounds(routeLine.getBounds());
+      })
+      .catch(err => {
+        console.error("Route fetch error:", err);
+        alert("Failed to get route");
+      });
+  }
+
+  function centerMap() {
+    if (currentLatLng) {
+      map.setView(currentLatLng, 15);
+    }
+  }
+
+  function toggleFollow() {
+    autoFollow = !autoFollow;
+    alert("Auto-follow is now " + (autoFollow ? "ON" : "OFF"));
+  }
+
+  function clearRoute() {
+    if (routeLine) {
+      map.removeLayer(routeLine);
+      routeLine = null;
+    }
+    if (destMarker) {
+      map.removeLayer(destMarker);
+      destMarker = null;
+    }
+    destinationLatLng = null;
+    elDest.textContent = "Not set";
+    elDistance.textContent = "-";
+    elEta.textContent = "-";
+  }
+
+  // Start geolocation
+  if (navigator.geolocation) {
+    navigator.geolocation.watchPosition(pos => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      currentLatLng = [lat, lng];
+
+      if (!mapInitialized) {
+        setupMap(lat, lng);
+        mapInitialized = true;
+      } else if (userMarker) {
+        userMarker.setLatLng(currentLatLng);
+        updateCoordsDisplay();
+
+        if (autoFollow) {
+          map.setView(currentLatLng);
+        }
+
+        if (destinationLatLng && routeLine) {
+          drawRoute(); // optionally re-draw if user moved far
+        }
+      }
+    }, err => {
+      alert("Location access failed");
+      console.error(err);
+    }, { enableHighAccuracy: true });
+  } else {
+    alert("Geolocation not supported");
+  }
+</script>
+
+</body>
+</html>
